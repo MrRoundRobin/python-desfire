@@ -7,7 +7,7 @@ from .devices.base import Device
 from .enums import DESFireCommand, DESFireCommunicationMode, DESFireKeySettings, DESFireKeyType, DESFireStatus
 from .exceptions import DESFireAuthException, DESFireCommunicationError, DESFireException
 from .key import DESFireKey
-from .schemas import CardVersion, FileSettings, KeySettings
+from .schemas import ApplicationID, CardVersion, FileSettings, KeySettings
 from .util import CRC32, xor_lists
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class DESFire:
     is_authenticated: bool = False
     session_key: DESFireKey | None = None
     max_frame_size: int = 60
-    last_selected_application: bytes | None = None
+    last_selected_application: ApplicationID | None = None
     last_auth_key_id: int | None = None
 
     def __init__(self, device: Device):
@@ -571,7 +571,7 @@ class DESFire:
         )
 
         res = KeySettings(
-            application_id=self.last_selected_application or b"\0\0\0\0\0\0\0",
+            application_id=self.last_selected_application or ApplicationID(0),
             key_type=DESFireKeyType(resp[1] & 0xF0),  # Only interested in first 4 bits of the second byte
             max_keys=resp[1] & 0x0F,  # Only interested in last 4 bits of the second byte
             settings=[],
@@ -706,7 +706,7 @@ class DESFire:
         # The type of key can only be changed for the PICC master key
         # Applications must define their key type in create_application()
         key_number = key_id & 0x0F
-        if self.last_selected_application == b"\0\0\0\0\0\0\0":
+        if self.last_selected_application == 0:
             key_number = key_number | current_key.key_type.value
             logger.debug(f"Key number parameter calculated: {key_number:02x}")
 
@@ -798,7 +798,7 @@ class DESFire:
     ## Application related
     #
 
-    def get_application_ids(self) -> list[bytes]:
+    def get_application_ids(self) -> list[ApplicationID]:
         """
         Lists all application currently configured on the card.
 
@@ -806,7 +806,7 @@ class DESFire:
             Not required.
 
         Returns:
-            list[bytes]: List of application IDs, in a 3 bytes
+            list[ApplicationID]: List of ApplicationIDs
         """
         logger.info(f"Executing command: get_application_ids (0x{DESFireCommand.GET_APPLICATION_IDS.value:02x})")
 
@@ -818,16 +818,16 @@ class DESFire:
         logger.debug(f"Raw data: {raw_data.hex(' ')}")
 
         # Parse App data, each of them is 3 bytes long
-        apps = []
+        apps: list[ApplicationID] = []
         for i in range(0, len(raw_data), 3):
             appid = raw_data[i : i + 3]
             logger.debug(f"Found application with AppID {appid.hex(' ')}")
-            apps.append(appid)
+            apps.append(ApplicationID(appid))
 
         logger.debug(f"Found {len(apps)} applications")
         return apps
 
-    def select_application(self, appid: bytes):
+    def select_application(self, appid: ApplicationID):
         """
         Choose application on a card on which all the following commands will apply.
 
@@ -835,14 +835,14 @@ class DESFire:
             MAY be required depending on the application settings.
 
         Args:
-            appid (bytes): ID of the application.
+            appid (ApplicationID): ID of the application.
         """
 
-        logger.info(f"Selecting application with ID {appid.hex(' ')}")
+        logger.info(f"Selecting application with ID {appid}")
 
         #  As application selection invalidates auth, there's no need to use CMAC
         self._transceive(
-            self._command(DESFireCommand.SELECT_APPLICATION, appid),
+            self._command(DESFireCommand.SELECT_APPLICATION, appid.get()),
             DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.PLAIN,
         )
@@ -853,7 +853,7 @@ class DESFire:
         self.last_auth_key_id = None
         self.last_selected_application = appid
 
-    def create_application(self, appid: bytes, keysettings: KeySettings, keycount: int):
+    def create_application(self, appid: ApplicationID, keysettings: KeySettings, keycount: int):
         """
         Creates a new application on the card with the specified settings. The key settings provided are
         applied to the master key of the application.
@@ -862,7 +862,7 @@ class DESFire:
             Required.
 
         Args:
-            appid (bytes): 3 byte application ID.
+            appid (ApplicationID): 3 byte application ID.
             keysettings (KeySettings): Key settings to apply to the application.
             keycount (int): Number of keys that can be stored in the application.
 
@@ -882,7 +882,7 @@ class DESFire:
             logger.error("Key count must be between 0 and 14.")
             raise DESFireException("Key count must be between 0 and 14.")
 
-        logger.info(f"Creating application with ID: {appid.hex(' ')}, ")
+        logger.info(f"Creating application with ID: {appid}, ")
 
         # Structure of the APDU:
         # 0xCA + AppID (3 bytes) + key settings (1 byte) + app settings (4 MSB = key type, 4 LSB = key count)
@@ -890,7 +890,7 @@ class DESFire:
         self._transceive(
             self._command(
                 DESFireCommand.CREATE_APPLICATION,
-                appid,
+                appid.get(),
                 keysettings.get_settings(),
                 keycount | keysettings.key_type.value,
             ),
@@ -899,7 +899,7 @@ class DESFire:
         )
         logger.debug("Application created successfully")
 
-    def delete_application(self, appid: bytes):
+    def delete_application(self, appid: ApplicationID):
         """
         Deletes the application specified by appid
 
@@ -907,7 +907,7 @@ class DESFire:
             Required.
 
         Args:
-            appid (bytes): 3 byte application ID.
+            appid (ApplicationID): Application ID.
 
         Raises:
             DESFireException: if an invalid configuration is provided
@@ -917,10 +917,10 @@ class DESFire:
             logger.error("Tried to delete application without authentication")
             raise DESFireException("Not authenticated!")
 
-        logger.info("Deleting application for ID %s", appid.hex(" "))
+        logger.info("Deleting application for ID %s", appid)
 
         self._transceive(
-            self._command(DESFireCommand.DELETE_APPLICATION, appid),
+            self._command(DESFireCommand.DELETE_APPLICATION, appid.get()),
             DESFireCommunicationMode.CMAC,
             DESFireCommunicationMode.CMAC,
         )
@@ -1143,6 +1143,7 @@ class DESFire:
                 file_id,
                 struct.pack("<I", offset)[:3],
                 struct.pack("<I", length)[:3],
+                data,
             ),
             communication_mode,
             DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,

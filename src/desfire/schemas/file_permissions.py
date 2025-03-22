@@ -11,6 +11,10 @@ class FilePermissions:
         - 0xE         No restrictions (free access)
         - 0xF         No Access allowed
         """
+
+        if (read_key & 0xF0) or (write_key & 0xF0) or (read_write_key & 0xF0) or (change_key & 0xF0):
+            raise ValueError("Key values must be in the range of 0x00 to 0x0F")
+
         self.read_access = read_key & 0x0F
         self.write_access = write_key & 0x0F
         self.read_and_write_access = read_write_key & 0x0F
@@ -56,17 +60,10 @@ class FilePermissions:
     def __repr__(self):
         """
         Returns a human readable representation of the file permissions.
-
-        TODO: Update this to reflect the actual permissions
         """
-        temp = "----- FilePermissions ---\r\n"
-        if self.read_access:
-            temp += "READ|"
-        if self.write_access:
-            temp += "WRITE|"
-        if self.read_and_write_access:
-            temp += "READWRITE|"
-        if self.read_and_write_access:
-            temp += "CHANGE|"
+        temp = "FilePermissions:\r\n\r\n"
+        temp += f" {self.read_and_write_access:02} | {self.change_access:02} | {self.read_access:02} | {self.write_access:02}\r\n"
+        temp += "----+----+----+----\r\n"
+        temp += " RW | C  | R  | W\r\n"
 
-        return temp.rstrip("|")
+        return temp

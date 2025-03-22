@@ -75,9 +75,10 @@ class FileSettings:
         temp = " ----- FileSettings ----\r\n"
         temp += f"File type: {self.file_type.name}\r\n"
         temp += f"Encryption: {self.encryption.name}\r\n"
-        temp += f"Permissions: {repr(self.permissions)}\r\n"
 
         if self.file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE:
             temp += f"File size: {self.file_size}\r\n"
+
+        temp += f"Permissions: \r\n{repr(self.permissions)}\r\n"
 
         return temp
