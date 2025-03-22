@@ -26,15 +26,15 @@ class PCSCDevice(Device):
 
         self.card_connection = card_connection
 
-    def transceive(self, bytes: list[int]) -> list[int]:
+    def transceive(self, bytes: bytes) -> bytes:
         """
         Send in APDU request and wait for the response.
 
         Args:
-            bytes (list[int]): Outgoing bytes as list of bytes or byte array
+            bytes (bytes): Outgoing bytes as list of bytes or byte array
 
         Returns:
-            list[int]: List of bytes or byte array from the device.
+            bytes: bytes from the device.
         """
         if not self.card_connection.hcard:
             raise DESFireException(f"Tried to transit to non-open connection: {self.card_connection}")
@@ -49,4 +49,4 @@ class PCSCDevice(Device):
             raise CardConnectionException(
                 f"Failed to transmit with protocol {str(pcscprotocolheader)}." + SCardGetErrorMessage(hresult)
             )
-        return response
+        return bytes(response)

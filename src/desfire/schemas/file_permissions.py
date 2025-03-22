@@ -16,7 +16,7 @@ class FilePermissions:
         self.read_and_write_access = read_write_key & 0x0F
         self.change_access = change_key & 0x0F
 
-    def parse(self, data: list[int]):
+    def parse(self, data: bytes):
         """
         Parse the raw data into a FilePermissions object. Raw data is two bytes, split into 4-bit values.
 
@@ -42,14 +42,16 @@ class FilePermissions:
         self.change_access = data[0] & 0x0F
         self.read_and_write_access = (data[0] >> 4) & 0x0F
 
-    def get_permissions(self) -> list[int]:
+    def get_permissions(self) -> bytes:
         """
         Returns the permissions as a list of two bytes.
         """
-        return [
-            ((self.read_and_write_access & 0x0F) << 4) | (self.change_access & 0x0F),
-            ((self.read_access & 0x0F) << 4) | (self.write_access & 0x0F),
-        ]
+        return bytes(
+            [
+                ((self.read_and_write_access & 0x0F) << 4) | (self.change_access & 0x0F),
+                ((self.read_access & 0x0F) << 4) | (self.write_access & 0x0F),
+            ]
+        )
 
     def __repr__(self):
         """
@@ -66,4 +68,5 @@ class FilePermissions:
             temp += "READWRITE|"
         if self.read_and_write_access:
             temp += "CHANGE|"
-        return temp
+
+        return temp.rstrip("|")

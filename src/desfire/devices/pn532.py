@@ -1,7 +1,6 @@
 import time
 
 from ..exceptions import DESFireException
-from ..util import get_list
 from .base import Device
 
 # Try importing pyserial
@@ -57,9 +56,9 @@ class PN532UARTDevice(Device):
         self._uart.reset_input_buffer()
         self._uart.write(framebytes)
 
-    def _write_frame(self, data: bytearray) -> None:
-        """Write a frame to the PN532 with the specified data bytearray."""
-        assert data is not None and 1 < len(data) < 255, "Data must be array of 1 to 255 bytes."
+    def _write_frame(self, data: bytes) -> None:
+        """Write a frame to the PN532 with the specified data bytes."""
+        assert data is not None and 1 < len(data) < 255, "Data must be 1 to 255 bytes."
         # Build frame to send as:
         # - Preamble (0x00)
         # - Start code  (0x00, 0xFF)
@@ -69,17 +68,22 @@ class PN532UARTDevice(Device):
         # - Checksum
         # - Postamble (0x00)
         length = len(data)
-        frame = bytearray(length + 8)
-        frame[0] = _PREAMBLE
-        frame[1] = _STARTCODE1
-        frame[2] = _STARTCODE2
-        checksum = sum(frame[0:3])
-        frame[3] = length & 0xFF
-        frame[4] = (~length + 1) & 0xFF
-        frame[5:-2] = data
-        checksum += sum(data)
-        frame[-2] = ~checksum & 0xFF
-        frame[-1] = _POSTAMBLE
+        checksum = _PREAMBLE + _STARTCODE1 + _STARTCODE2 + sum(data)
+
+        frame = bytearray(
+            [
+                _PREAMBLE,
+                _STARTCODE1,
+                _STARTCODE2,
+                length & 0xFF,
+                (~length + 1) & 0xFF,
+            ]
+        )
+
+        frame.extend(data)
+        frame.append((~checksum) & 0xFF)
+        frame.append(_POSTAMBLE)
+
         # Send frame.
         self._write_data(bytes(frame))
 
@@ -100,18 +104,15 @@ class PN532UARTDevice(Device):
             raise DESFireException("No data read from PN532")
         return frame
 
-    def _send_command(self, command: int, params: list[int], timeout: float = 1) -> bool:
+    def _send_command(self, command: int, params: bytes, timeout: float = 1) -> bool:
         """Send specified command to the PN532 and wait for an acknowledgment.
         Will wait up to timeout seconds for the acknowledgment and return True.
         If no acknowledgment is received, False is returned.
         """
 
         # Build frame data with command and parameters.
-        data = bytearray(2 + len(params))
-        data[0] = _HOSTTOPN532
-        data[1] = command & 0xFF
-        for i, val in enumerate(params):
-            data[2 + i] = val
+        data = bytes([_HOSTTOPN532, command & 0xFF]) + params
+
         # Send frame and wait for response.
         try:
             self._write_frame(data)
@@ -119,12 +120,14 @@ class PN532UARTDevice(Device):
             return False
         if not self._wait_ready(timeout):
             return False
+
         # Verify ACK response and wait to be ready for function response.
         if not _ACK == self._read_data(len(_ACK)):
             raise RuntimeError("Did not receive expected ACK from PN532!")
+
         return True
 
-    def _read_frame(self, length: int) -> list[int]:
+    def _read_frame(self, length: int) -> bytes:
         """Read a response frame from the PN532 of at most length bytes in size.
         Returns the data inside the frame if found, otherwise raises an exception
         if there is an error parsing the frame.  Note that less than length bytes
@@ -133,29 +136,37 @@ class PN532UARTDevice(Device):
         # Read frame with expected length of data.
         response = self._read_data(length + 7)
 
+        if len(response) < 2:
+            raise RuntimeError("Response frame too short!")
+
+        if response[0] != 0x00:
+            raise RuntimeError("Response frame preamble does not contain 0x00!")
+
         # Swallow all the 0x00 values that preceed 0xFF.
-        offset = 0
-        while response[offset] == 0x00:
-            offset += 1
-            if offset >= len(response):
-                raise RuntimeError("Response frame preamble does not contain 0x00FF!")
-        if response[offset] != 0xFF:
-            raise RuntimeError("Response frame preamble does not contain 0x00FF!")
-        offset += 1
-        if offset >= len(response):
-            raise RuntimeError("Response contains no data!")
+        response = response.lstrip(b"\x00")
+
+        if len(response) < 1 or response[0] != 0xFF:
+            raise RuntimeError("Response frame preamble does not contain 0xFF!")
+
+        if len(response) < 2:
+            raise RuntimeError("Response has no length byte!")
+
         # Check length & length checksum match.
-        frame_len = response[offset]
-        if (frame_len + response[offset + 1]) & 0xFF != 0:
+        frame_len = response[1]
+
+        if (frame_len + response[2]) & 0xFF != 0:
             raise RuntimeError("Response length checksum did not match length!")
+
         # Check frame checksum value matches bytes.
-        checksum = sum(response[offset + 2 : offset + 2 + frame_len + 1]) & 0xFF
+        checksum = sum(response[3 : frame_len + 4]) & 0xFF
+
         if checksum != 0:
             raise RuntimeError("Response checksum did not match expected value: ", checksum)
-        # Return frame data.
-        return get_list(response[offset + 2 : offset + 2 + frame_len])
 
-    def _process_response(self, command: int, response_length: int = 0, timeout: float = 1) -> list[int] | None:
+        # Return frame data.
+        return response[3 : frame_len + 3]
+
+    def _process_response(self, command: int, response_length: int = 0, timeout: float = 1) -> bytes | None:
         """Process the response from the PN532 and expect up to response_length
         bytes back in a response.  Note that less than the expected bytes might
         be returned! Will wait up to timeout seconds for a response and return
@@ -164,8 +175,10 @@ class PN532UARTDevice(Device):
         """
         if not self._wait_ready(timeout):
             return None
+
         # Read response bytes.
         response = self._read_frame(response_length + 2)
+
         # Check that response is for the called function.
         if not (response[0] == _PN532TOHOST and response[1] == (command + 1)):
             raise RuntimeError("Received unexpected command response!")
@@ -180,14 +193,14 @@ class PN532UARTDevice(Device):
         return response[2:]
 
     def _call_function(
-        self, command: int, response_length: int = 0, params: list[int] = [], timeout: float = 1
-    ) -> list[int] | None:
+        self, command: int, response_length: int = 0, params: bytes = b"", timeout: float = 1
+    ) -> bytes | None:
         """
         Send specified command to the PN532 and expect up to response_length
         bytes back in a response.  Note that less than the expected bytes might
-        be returned!  Params can optionally specify an array of bytes to send as
+        be returned!  Params can optionally specify bytes to send as
         parameters to the function call.  Will wait up to timeout seconds
-        for a response and return a bytearray of response bytes, or None if no
+        for a response and return response bytes, or None if no
         response is available within the timeout.
         """
         if not self._send_command(command, params=params, timeout=timeout):
@@ -203,14 +216,17 @@ class PN532UARTDevice(Device):
         """
         # Send passive read command for 1 card.  Expect at most a 7 byte UUID.
         try:
-            response = self._send_command(_COMMAND_INLISTPASSIVETARGET, params=[0x01, card_baud], timeout=timeout)
+            response = self._send_command(
+                _COMMAND_INLISTPASSIVETARGET, params=bytes([0x01, card_baud]), timeout=timeout
+            )
         except Exception:
             return False  # _COMMAND_INLISTPASSIVETARGET failed
+
         return response
 
-    def wait_for_card(self, timeout: float = 1) -> list[int] | None:
+    def wait_for_card(self, timeout: float = 1) -> bytes | None:
         """Will wait up to timeout seconds and return None if no card is found,
-        otherwise a bytearray with the UID of the found card is returned.
+        otherwise bytes with the UID of the found card is returned.
         `listen_for_passive_target` must have been called first in order to put
         the PN532 into a listening mode.
         It can be useful to use this when using the IRQ pin. Use the IRQ pin to
@@ -229,15 +245,15 @@ class PN532UARTDevice(Device):
         # Return UID of card.
         return response[6 : 6 + response[5]]
 
-    def transceive(self, bytes: list[int]) -> list[int]:
+    def transceive(self, bytes: bytes) -> bytes:
         """
         Send in APDU request and wait for the response.
 
         Args:
-            bytes (list[int]): Outgoing bytes as list of bytes or byte array
+            bytes (bytes): Outgoing bytes as list of bytes or byte array
 
         Returns:
-            list[int]: List of bytes or byte array from the device.
+            bytes: bytes from the device.
         """
-        params = [0x01] + bytes
+        params = bytes([0x01]) + bytes
         return self._call_function(_COMMAND_INDATAEXCHANGE, response_length=0xFF, params=params) or []

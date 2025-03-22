@@ -5,7 +5,7 @@ from desfire.schemas import KeySettings
 from .cmac import CMAC
 from .enums import DESFireKeyType
 from .exceptions import DESFireException
-from .util import CRC32, get_ciphermod, get_list, to_hex_string, xor_lists
+from .util import CRC32, get_ciphermod, xor_lists
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +22,17 @@ class DESFireKey:
     cmac: CMAC | None = None
 
     # Global IV for this key, used for cipher operations and CMAC calculation
-    iv: list[int]
-    iv0: list[int]
+    iv: bytes
+    iv0: bytes
 
-    def __init__(self, settings: KeySettings, key_data: list[int] | str | bytearray | int | bytes | None = None):
+    def __init__(self, settings: KeySettings, key_data: bytes | None = None):
         """
         Initializes the DESFire key object with the given settings and key data.
 
         Args:
             settings (KeySettings): Key settings object, can be obtained from the card.
-            key_data (list[int] | str | bytearray | int | bytes | None, optional):
-                Key data to be set. Will be parsed using the get_list function. Defaults to None.
+            key_data (bytes | None, optional):
+                Key data to be set. Defaults to None.
 
         Raises:
             DESFireException: If invalid key type is set or key data is not provided.
@@ -54,10 +54,10 @@ class DESFireKey:
         logger.debug(f"Setting key size to {key_size}")
         self.cipher_block_size = key_size
         self.key_size = key_size
-        self.iv0 = [0] * key_size
+        self.iv0 = bytes(key_size)
 
-    def set_iv(self, iv: list[int]):
-        logger.debug(f"Setting IV to {to_hex_string(iv)}")
+    def set_iv(self, iv: bytes):
+        logger.debug(f"Setting IV to {iv.hex(' ')}")
         self.iv = iv
 
     def cipher_init(self):
@@ -97,7 +97,7 @@ class DESFireKey:
 
         # Initialize the key to a default value if it is not set
         if self.key_bytes is None:
-            self.key_bytes = b"\00" * self.key_size
+            self.key_bytes = bytes(self.key_size)
         if self.cipher_block_size is None:
             self.cipher_block_size = self.key_size
 
@@ -121,33 +121,33 @@ class DESFireKey:
         assert self.key_bytes is not None
         return self.key_bytes
 
-    def set_key(self, key: list[int] | str | bytearray | int | bytes):
+    def set_key(self, key: bytes):
         """
-        Sets the key to the given value. Will be passed using the get_list function.
+        Sets the key to the given value.
 
         Args:
-            key (list[int] | str | bytearray | int | bytes): Key data as a list of integers,
+            key (bytes): Key data as a list of integers,
                 a string of HEX characters, a byte array or an integer.
         """
         logger.debug("Setting key value to provided data")
-        self.key_bytes = bytes(get_list(key))
+        self.key_bytes = key
         self._set_key_size(len(self.key_bytes))
 
-    def encrypt(self, data: list[int]) -> list[int]:
+    def encrypt(self, data: bytes) -> bytes:
         """
         Encrypts the given data with the key and returns the encrypted data as a list of integers.
         """
-        cipher = get_ciphermod(self.key_type, self.get_key(), bytes(self.iv))
-        return list(bytearray(cipher.encrypt(bytes(data))))
+        cipher = get_ciphermod(self.key_type, self.get_key(), self.iv)
+        return cipher.encrypt(bytes(data))
 
-    def decrypt(self, dataEnc: list[int]) -> list[int]:
+    def decrypt(self, dataEnc: bytes) -> bytes:
         """
         Decrypts the given data with the key and returns the decrypted data as a list of integers.
         """
-        cipher = get_ciphermod(self.key_type, self.get_key(), bytes(self.iv))
-        logger.debug(f"Decrypting data: {to_hex_string(dataEnc)} using key type {self.key_type.name}")
-        block = cipher.decrypt(bytes(dataEnc))
-        return list(bytearray(block))
+        cipher = get_ciphermod(self.key_type, self.get_key(), self.iv)
+        logger.debug(f"Decrypting data: {dataEnc.hex(' ')} using key type {self.key_type.name}")
+        block = cipher.decrypt(dataEnc)
+        return block
 
     def generate_cmac(self):
         """
@@ -156,7 +156,7 @@ class DESFireKey:
         """
         self.cmac = CMAC(self.key_bytes, key_type=self.key_type)
 
-    def calculate_cmac(self, data: list[int], pre_padded: bool = False) -> list[int]:
+    def calculate_cmac(self, data: bytes, pre_padded: bool = False) -> bytes:
         """
         Calculate the CMAC of a sequence of bytes. Will update the IV.
 
@@ -167,16 +167,16 @@ class DESFireKey:
         assert self.cipher_block_size is not None
 
         # Calculate the CMAC
-        logger.debug(f"Calculating CMAC for data: {to_hex_string(data)}")
-        ndata = data.copy()
+        logger.debug(f"Calculating CMAC for data: {data.hex(' ')}")
+        ndata: bytes = data.copy()
         padded: bool = pre_padded
 
         if len(ndata) % self.cipher_block_size:
             # Padding is needed, PAD the data with 0x80, 0x00* until the last block and XOR the last block with K2
-            ndata += [self.cmac.PADDING_CONSTANT] + [0x00] * (
-                self.cipher_block_size - len(ndata) % self.cipher_block_size - 1
-            )
-            logger.debug(f"Padding data to block size: {to_hex_string(ndata)}")
+            ndata += bytes([self.cmac.PADDING_CONSTANT])
+            ndata += bytes(self.cipher_block_size - len(ndata) % self.cipher_block_size)
+
+            logger.debug(f"Padding data to block size: {ndata.hex(' ')}")
             padded = True
 
         # XOR the last block with k1 or k2, depending on the padding
@@ -189,17 +189,17 @@ class DESFireKey:
 
         # XOR the last block with the key
         xor_data = ndata[0 : -self.cipher_block_size] + xor_lists(ndata[-self.cipher_block_size :], key_to_use)
-        logger.debug(f"XOR data: {to_hex_string(xor_data)}")
+        logger.debug(f"XOR data: {xor_data.hex(' ')}")
 
         # Encrypt the padded data
         ret = self.encrypt(xor_data)
-        logger.debug(f"Encrypted data: {to_hex_string(ret)}")
+        logger.debug(f"Encrypted data: {ret.hex(' ')}")
 
         # Update the IV with the last block of the encrypted data
         self.set_iv(ret[-self.cipher_block_size :])
         return ret[-self.cipher_block_size :]
 
-    def encrypt_msg(self, data: list[int], disable_crc: bool = False, offset: int = 1) -> list[int]:
+    def encrypt_msg(self, data: bytes, disable_crc: bool = False, offset: int = 1) -> bytes:
         """
         Encrypts a message that is to be sent to the card.
         """
@@ -210,8 +210,7 @@ class DESFireKey:
             data += CRC32(data)
 
         # Pad the data to the next block size
-        data += [0x00] * (-(len(data) - offset) % self.cipher_block_size)
+        data.ljust((-(len(data) - offset) % self.cipher_block_size), b"\0")
 
         # Encrypt the data
-        ret = data[0:offset] + self.encrypt(data[offset:])
-        return ret
+        return data[0:offset] + self.encrypt(data[offset:])

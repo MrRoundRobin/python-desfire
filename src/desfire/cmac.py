@@ -1,7 +1,5 @@
 import logging
 
-from Crypto.Util.py3compat import bchr
-
 from .enums import DESFireKeyType
 from .util import get_ciphermod, shift_bytes
 
@@ -23,7 +21,7 @@ class CMAC:
         logger.debug("Initializing CMAC with provided key. Calculating K1 and K2.")
 
         self._key = key
-        cipher = get_ciphermod(key_type, key, bchr(0) * len(key))
+        cipher = get_ciphermod(key_type, key, bytes(len(key)))
         self._bs = cipher.block_size
 
         # Section 5.3 of NIST SP 800 38B
@@ -36,7 +34,7 @@ class CMAC:
             raise TypeError(f"CMAC requires a cipher with a block size of 8 or 16 bytes, not {self._bs}")
 
         # Encrypt a block of zeros with IV of zeros and the session key
-        l = cipher.encrypt(bchr(0) * self._bs)
+        l = cipher.encrypt(bytes(self._bs))
         if int(l[0]) & 0x80:
             self._k1 = shift_bytes(l, const_Rb)
         else:
@@ -47,9 +45,9 @@ class CMAC:
             self._k2 = shift_bytes(self._k1)
 
     @property
-    def k1(self) -> list[int]:
-        return list(self._k1)
+    def k1(self) -> bytes:
+        return self._k1
 
     @property
-    def k2(self) -> list[int]:
-        return list(self._k2)
+    def k2(self) -> bytes:
+        return self._k2

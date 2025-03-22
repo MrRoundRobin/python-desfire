@@ -7,7 +7,7 @@ from .file_permissions import FilePermissions
 class FileSettings:
     def __init__(
         self,
-        encryption: DESFireCommunicationMode | None = None,
+        encryption: DESFireCommunicationMode = DESFireCommunicationMode.PLAIN,
         file_type: DESFireFileType | None = None,
         permissions: FilePermissions | None = None,
         file_size: int = 0,
@@ -31,7 +31,7 @@ class FileSettings:
         # used only for MDFT_STANDARD_DATA_FILE and MDFT_BACKUP_DATA_FILE, uint32_t
         self.file_size = file_size
 
-    def parse(self, data):
+    def parse(self, data: bytes):
         """
         Takes raw data from command 0xF5 (get file settings) and parses it into a FileSettings object.
 
@@ -63,10 +63,10 @@ class FileSettings:
 
         if self.file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE:
             # Standard data file, parse file size in bytes. <I is little-endian unsigned int
-            self.file_size = struct.unpack("<I", bytes(data[4:7] + [0x00]))[0]
+            (self.file_size,) = struct.unpack("<I", data[4:7] + b"\0")
         else:
             # TODO: We currently only support standard data files
-            raise NotImplementedError(f"Filetype {data[0]:02X} is currently not supported.")
+            raise NotImplementedError(f"Filetype {data[0:1].hex()} is currently not supported.")
 
     def __repr__(self):
         """
@@ -76,6 +76,7 @@ class FileSettings:
         temp += f"File type: {self.file_type.name}\r\n"
         temp += f"Encryption: {self.encryption.name}\r\n"
         temp += f"Permissions: {repr(self.permissions)}\r\n"
+
         if self.file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE:
             temp += f"File size: {self.file_size}\r\n"
 

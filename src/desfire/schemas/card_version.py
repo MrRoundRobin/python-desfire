@@ -1,13 +1,10 @@
-from ..util import to_hex_string
-
-
 class CardVersion:
     """
     This class represents the output of the GetVersion command and parses the data into a more readable format.
     """
 
-    def __init__(self, data: list[int]):
-        self.raw_bytes: list[int] = data
+    def __init__(self, data: bytes):
+        self.raw_bytes: bytes = data
         self.hardware_vendor_id: int = data[0]
         self.hardware_type: int = data[1]
         self.hardware_sub_type: int = data[2]
@@ -24,8 +21,8 @@ class CardVersion:
         self.software_storage_size: int = data[12]
         self.software_protocol: int = data[13]
 
-        self.uid: list[int] = data[14:21]
-        self.batch_no: list[int] = data[21:25]
+        self.uid: bytes = data[14:21]
+        self.batch_no: bytes = data[21:25]
         self.production_date_cw: int = data[26]
         self.production_date_year: int = data[27]
 
@@ -35,6 +32,6 @@ class CardVersion:
         temp += f"Software Version: {self.software_major_version}.{self.software_minor_version}\r\n"
         temp += f"EEPROM size:      {1 << (self.hardware_storage_size - 1)} bytes\r\n"
         temp += f"Production:       week {self.production_date_cw:X}, year 20{self.production_date_year:02X}\r\n"
-        temp += f"UID no:           {to_hex_string(self.uid)}\r\n"
-        temp += f"Batch no:         {to_hex_string(self.batch_no)}\r\n"
+        temp += f"UID no:           {self.uid.hex(' ')}\r\n"
+        temp += f"Batch no:         {self.batch_no.hex(' ')}\r\n"
         return temp

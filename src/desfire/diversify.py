@@ -3,12 +3,11 @@ import logging
 from .enums import DESFireKeyType
 from .key import DESFireKey
 from .schemas import KeySettings
-from .util import to_hex_string
 
 logger = logging.getLogger(__name__)
 
 
-def diversify_key(key_data: list[int], diversification: list[int], pad_to_32: bool = True) -> list[int]:
+def diversify_key(key_data: bytes, diversification: bytes, pad_to_32: bool = True) -> bytes:
     """
     Generates a diversified key based on NXP application note AN10922
 
@@ -16,15 +15,15 @@ def diversify_key(key_data: list[int], diversification: list[int], pad_to_32: bo
     card and the application. For example, the UID of the card, the AID of the application, and the system ID.
 
     Args:
-        key_data (list[int]): Original key data that will be diversified.
-        diversification (list[int]): Diversification data. Refer to the application note for a recommendation
+        key_data (bytes): Original key data that will be diversified.
+        diversification (bytes): Diversification data. Refer to the application note for a recommendation
         pad_to_32 (bool, optional): The NXP application note calls for the diversification data to be padded to
             32 bytes. Depending on the block size of the underlying cipher, this might not be neccessary and
             there may be existing implementations that do not pad the data.
 
 
     Returns:
-        list[int]: Diversified key data
+        bytes: Diversified key data
     """
 
     logger.debug("Diversifying key using NXP AN10922 method")
@@ -33,12 +32,13 @@ def diversify_key(key_data: list[int], diversification: list[int], pad_to_32: bo
     padded: bool = False
     if len(diversification) < 32 and pad_to_32:
         logger.debug("Padding diversification data to 32 bytes")
-        diversification += [0x80] + [0] * (32 - len(diversification) - 1)
+        diversification += bytes([0x80])
+        diversification += bytes(32 - len(diversification))
         padded = True
 
-    logger.debug(f"Diversification data: {to_hex_string(diversification)}")
+    logger.debug(f"Diversification data: {diversification.hex(' ')}")
 
-    key = DESFireKey(KeySettings(key_type=DESFireKeyType.DF_KEY_AES), bytes(key_data))
+    key = DESFireKey(KeySettings(key_type=DESFireKeyType.DF_KEY_AES), key_data)
     key.generate_cmac()
     key.clear_iv()
 

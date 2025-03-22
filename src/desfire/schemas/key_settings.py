@@ -8,7 +8,7 @@ class KeySettings:
 
     def __init__(
         self,
-        application_id: list[int] | None = None,
+        application_id: bytes | None = None,
         key_type: DESFireKeyType | None = None,
         settings: list[DESFireKeySettings] | None = None,
         max_keys: int | None = None,
@@ -21,7 +21,7 @@ class KeySettings:
     """
     The application ID these settings have been retrieved for
     """
-    application_id: list[int] | None = None
+    application_id: bytes | None = None
 
     """
     Key type (DES, 2K3DES, 3K3DES, AES)
