@@ -64,42 +64,45 @@ class DESFire:
         while additional_data:
             # Send the APDU command to the card
             logger.debug("Running APDU command, sending: %s", apdu_cmd.hex(" "))
+
+            if not native:
+                # Wrap the command in an ISO 7816 APDU frame
+                apdu_cmd = "b\x90" + apdu_cmd[0] + b"\x00\x00" + bytes([len(apdu_cmd) - 1]) + apdu_cmd[1:] + b"\x00"
+
+                logger.debug("Wrapped APDU command: %s", apdu_cmd.hex(" "))
+
             resp = self.device.transceive(apdu_cmd)
             logger.debug("Received APDU response: %s", resp.hex(" "))
 
-            # DESfire native commands are used
             if native:
                 status = resp[0]
-                # Check for known error interpretation
-                if status == 0xAF:
-                    if af_passthrough:
-                        logger.debug("More data present (indicated by 0xAF), returning response to callee")
-                        additional_data = False
-                    else:
-                        # Need to loop more cycles to fill in receive buffer
-                        logger.debug("More data present (indicated by 0xAF), sending continue command")
-                        additional_data = True
-                        apdu_cmd = self._command(DESFireCommand.ADDITIONAL_FRAME)  # Continue
-                elif status != 0x00:
-                    try:
-                        error_description = DESFireStatus(status).name
-                    except ValueError:
-                        error_description = f"Unknown error, status {status}"
-                    logger.error("Received error from card: %s", error_description)
-                    raise DESFireCommunicationError(error_description, status)
-                else:
-                    additional_data = False
-
                 result.extend(resp[1:])
-            else:  # If commands are wrapped in ISO 7816-4 APDU Frames, SW1 must be 0x91
+            else:
                 if resp[-2] != 0x91:
                     raise DESFireCommunicationError(
-                        "Received invalid response for command using native communication", resp[-2:]
+                        "Received invalid response for command using iso7816 communication", resp[-2:]
                     )
-                # Possible status words:
-                # https://github.com/jekkos/android-hce-desfire/blob/master/hceappletdesfire/src/main/java/net/jpeelaer/hce/desfire/DesfireStatusWord.java
-                # status = resp[-1]
+                status = resp[-1]
                 result.extend(resp[0:-2])
+
+            if status == DESFireStatus.ST_MoreFrames.value:
+                if af_passthrough:
+                    logger.debug("More data present (indicated by 0xAF), returning response to callee")
+                    additional_data = False
+                else:
+                    # Need to loop more cycles to fill in receive buffer
+                    logger.debug("More data present (indicated by 0xAF), sending continue command")
+                    additional_data = True
+                    apdu_cmd = self._command(DESFireCommand.ADDITIONAL_FRAME)  # Continue
+            elif status != DESFireStatus.ST_Success.value:
+                try:
+                    error_description = DESFireStatus(status).name
+                except ValueError:
+                    error_description = f"Unknown error, status {status}"
+                logger.error("Received error from card: %s", error_description)
+                raise DESFireCommunicationError(error_description, status)
+            else:
+                additional_data = False
 
         return bytes(result)
 
