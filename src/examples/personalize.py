@@ -18,7 +18,7 @@ from smartcard.CardRequest import CardRequest
 from smartcard.CardType import AnyCardType
 from smartcard.Exceptions import CardRequestTimeoutException
 
-from desfire import DESFire, DESFireKey, PCSCDevice, diversify_key, get_list, to_hex_string
+from desfire import DESFire, DESFireKey, PCSCDevice, diversify_key
 from desfire.enums import DESFireCommunicationMode, DESFireFileType, DESFireKeySettings, DESFireKeyType
 from desfire.schemas import FilePermissions, FileSettings, KeySettings
 
@@ -28,11 +28,11 @@ MIFARE_ACL_READ_BASE_KEY = ""  # 16 bytes AES key
 MIFARE_ACL_WRITE_BASE_KEY = ""  # 16 bytes AES key
 
 # Constants
-MIFARE_APP_ID = "DEAFFE"  # 7 bytes
+MIFARE_APP_ID = bytes([0xDE, 0xAF, 0xFE]).ljust(2, b"\0")  # 7 bytes
 MIFARE_ACL_READ_BASE_KEY_ID = 0x1
 MIFARE_ACL_WRITE_BASE_KEY_ID = 0x2
-MIFARE_SYS_ID = "FF0000"  # 3 bytes, can essentially be anything
-MIFARE_ENCRYPTED_FILE_ID = 0x1
+MIFARE_SYS_ID = bytes([0xFF, 0x0, 0x0])  # 3 bytes, can essentially be anything
+MIFARE_ENCRYPTED_FILE_ID = 1
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ cardservice.connection.connect()
 desfire = DESFire(PCSCDevice(cardservice.connection.component))
 
 # Create Key objects
-AES_NULL_KEY_DATA = "00" * 16
+AES_NULL_KEY_DATA = bytes(16)
 aes_keysettings = KeySettings(
     key_type=DESFireKeyType.DF_KEY_AES,
 )
@@ -62,13 +62,13 @@ aes_null_key = DESFireKey(aes_keysettings, AES_NULL_KEY_DATA)
 # Authenticate with default DES key
 print("Authenticating with default DES key...")
 key_settings = desfire.get_key_setting()
-mk = DESFireKey(key_settings, "00" * 8)
+mk = DESFireKey(key_settings, bytes(8))
 desfire.authenticate(0x0, mk)
 
 # Get real UID
 print("Getting real UID...")
 uid = desfire.get_real_uid()
-print("  - UID: ", to_hex_string(uid))
+print("  - UID: ", uid.hex(" "))
 
 # Set default key
 print("Setting default key...")
@@ -90,7 +90,7 @@ desfire.create_application(MIFARE_APP_ID, app_settings, 4)
 # Verify application creation
 applications = desfire.get_application_ids()
 assert len(applications) == 1
-assert applications[0] == get_list(MIFARE_APP_ID)
+assert applications[0] == MIFARE_APP_ID
 print("  - Application created successfully.")
 
 # Select application
@@ -113,9 +113,9 @@ print("Re-authenticating with new AES key...")
 desfire.authenticate(0x0, aes_app_mk)
 
 # Change file read and write keys (diversified)
-diversification_data = [0x01] + uid + get_list(MIFARE_APP_ID) + get_list(MIFARE_SYS_ID)
-read_div_key_bytes = diversify_key(get_list(MIFARE_ACL_READ_BASE_KEY), diversification_data, pad_to_32=False)
-write_div_key_bytes = diversify_key(get_list(MIFARE_ACL_WRITE_BASE_KEY), diversification_data, pad_to_32=False)
+diversification_data = bytes([0x01]) + uid + MIFARE_APP_ID + MIFARE_SYS_ID
+read_div_key_bytes = diversify_key(MIFARE_ACL_READ_BASE_KEY, diversification_data, pad_to_32=False)
+write_div_key_bytes = diversify_key(MIFARE_ACL_WRITE_BASE_KEY, diversification_data, pad_to_32=False)
 
 print("Changing file read key...")
 aes_file_read_key = DESFireKey(aes_keysettings, read_div_key_bytes)
@@ -148,9 +148,9 @@ assert file_data.file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE
 print("  - File created successfully.")
 
 print("Writing UID to encrypted file...")
-data = [0x0] + uid
+data = uid.rjust(8, b"\0")
 assert len(data) == 8
-desfire.write_file_data(MIFARE_ENCRYPTED_FILE_ID, 0x0, file_data.encryption, get_list(data))
+desfire.write_file_data(MIFARE_ENCRYPTED_FILE_ID, 0x0, file_data.encryption, data)
 
 print("Reading from encrypted file...")
 rdata = desfire.read_file_data(MIFARE_ENCRYPTED_FILE_ID, file_data)

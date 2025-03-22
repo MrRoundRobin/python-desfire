@@ -2,7 +2,7 @@ from smartcard.CardRequest import CardRequest
 from smartcard.CardType import AnyCardType
 from smartcard.Exceptions import CardRequestTimeoutException
 
-from desfire import DESFire, DESFireKey, PCSCDevice, to_hex_string
+from desfire import DESFire, DESFireKey, PCSCDevice
 
 cardtype = AnyCardType()
 cardrequest = CardRequest(timeout=30, cardType=cardtype)
@@ -22,9 +22,9 @@ desfire = DESFire(PCSCDevice(cardservice.connection.component))
 # Authenticate with default DES key by retrieving the key settings from the card,
 # providing the default key and then authenticate against the master key 0x0
 key_settings = desfire.get_key_setting()
-mk = DESFireKey(key_settings, "00" * 8)
+mk = DESFireKey(key_settings, bytes(8))
 desfire.authenticate(0x0, mk)
 
 # Get real UID
 uid = desfire.get_real_uid()
-print(to_hex_string(uid))
+print(uid.hex(" "))

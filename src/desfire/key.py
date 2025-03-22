@@ -109,7 +109,7 @@ class DESFireKey:
         Resets the IV to all zero bytes.
         """
         logger.debug("Clearing IV back to default value.")
-        self.set_iv(self.iv0.copy())
+        self.set_iv(self.iv0)
 
     def get_key(self) -> bytes:
         """
@@ -168,7 +168,7 @@ class DESFireKey:
 
         # Calculate the CMAC
         logger.debug(f"Calculating CMAC for data: {data.hex(' ')}")
-        ndata: bytes = data.copy()
+        ndata: bytes = data
         padded: bool = pre_padded
 
         if len(ndata) % self.cipher_block_size:

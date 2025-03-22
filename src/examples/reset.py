@@ -26,7 +26,7 @@ desfire = DESFire(PCSCDevice(cardservice.connection.component))
 # Authenticate with default DES key
 print("Authenticating with default DES key...")
 key_settings = desfire.get_key_setting()
-mk = DESFireKey(key_settings, "00" * 8)
+mk = DESFireKey(key_settings, bytes(8))
 desfire.authenticate(0x0, mk)
 
 # Format card. WARNING: This will delete all applications and files on the card!

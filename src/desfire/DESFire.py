@@ -571,7 +571,7 @@ class DESFire:
         )
 
         res = KeySettings(
-            application_id=self.last_selected_application or b"\0\0\0",
+            application_id=self.last_selected_application or b"\0\0\0\0\0\0\0",
             key_type=DESFireKeyType(resp[1] & 0xF0),  # Only interested in first 4 bits of the second byte
             max_keys=resp[1] & 0x0F,  # Only interested in last 4 bits of the second byte
             settings=[],
@@ -706,7 +706,7 @@ class DESFire:
         # The type of key can only be changed for the PICC master key
         # Applications must define their key type in create_application()
         key_number = key_id & 0x0F
-        if self.last_selected_application == b"\0":
+        if self.last_selected_application == b"\0\0\0\0\0\0\0":
             key_number = key_number | current_key.key_type.value
             logger.debug(f"Key number parameter calculated: {key_number:02x}")
 
