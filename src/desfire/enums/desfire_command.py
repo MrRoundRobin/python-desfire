@@ -19,7 +19,7 @@ class DESFireCommand(Enum):
     ADDITIONAL_FRAME = 0xAF  # Indicating that data did not fit into one frame
 
     # Card Related Commands
-    FREE_MEM = 0x6E  # Not implemented
+    FREE_MEM = 0x6E
     FORMAT_PICC = 0xFC
     SET_CONFIGURATION = 0x5C  # Partly implemented, only 0x0501 (change default key)
     GET_VERSION = 0x60
@@ -44,29 +44,29 @@ class DESFireCommand(Enum):
 
     # File Related Commands
     CREATE_STD_DATA_FILE = 0xCD
-    CREATE_BACKUP_DATA_FILE = 0xCB  # Not implemented
-    CREATE_VALUE_FILE = 0xCC  # Not implemented
-    CREATE_LINEAR_RECORD_FILE = 0xC1  # Not implemented
-    CREATE_CYCLIC_RECORD_FILE = 0xC0  # Not implemented
+    CREATE_BACKUP_DATA_FILE = 0xCB
+    CREATE_VALUE_FILE = 0xCC
+    CREATE_LINEAR_RECORD_FILE = 0xC1
+    CREATE_CYCLIC_RECORD_FILE = 0xC0
     CREATE_TRANSACTION_MAC_FILE = 0xCE  # EV2 and EV3 only, Not implemented
     DELETE_FILE = 0xDF
     GET_FILE_IDS = 0x6F
-    GET_ISO_FILE_IDS = 0x61  # Not implemented
+    GET_ISO_FILE_IDS = 0x61
     GET_FILE_SETTINGS = 0xF5
     GET_FILE_COUNTERS = 0xF6  # Not implemented
-    CHANGE_FILE_SETTINGS = 0x5F  # Not implemented
+    CHANGE_FILE_SETTINGS = 0x5F
     READ_DATA = 0xBD  # Can apparently also be 0xAD, not sure about differences
     WRITE_DATA = 0x3D  # Can apparently also be 0x8D, not sure about differences
-    GET_VALUE = 0x6C  # Not implemented
-    CREDIT = 0x0C  # Not implemented
-    DEBIT = 0xDC  # Not implemented
-    LIMITED_CREDIT = 0x1C  # Not implemented
+    GET_VALUE = 0x6C
+    CREDIT = 0x0C
+    DEBIT = 0xDC
+    LIMITED_CREDIT = 0x1C
     READ_RECORDS = 0xBB  # Not implemented, can apparently also be 0xAB
     WRITE_RECORD = 0x3B  # Not implemented, can apparently also be 0x8B
     UPDATE_RECORD = 0xDB  # Not implemented
     CLEAR_RECORD_FILE = 0xEB  # Not implemented
-    COMMIT_TRANSACTION = 0xC7  # Not implemented
-    ABORT_TRANSACTION = 0xA7  # Not implemented
+    COMMIT_TRANSACTION = 0xC7
+    ABORT_TRANSACTION = 0xA7
     COMMIT_READER_ID = 0xC8  # EV2 and EV3 only, Not implemented
 
     # ISO Commands

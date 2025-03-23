@@ -20,7 +20,8 @@ class FilePermissions:
         self.read_and_write_access = read_write_key & 0x0F
         self.change_access = change_key & 0x0F
 
-    def parse(self, data: bytes):
+    @classmethod
+    def parse(cls, data: bytes) -> "FilePermissions":
         """
         Parse the raw data into a FilePermissions object. Raw data is two bytes, split into 4-bit values.
 
@@ -41,12 +42,15 @@ class FilePermissions:
         RW   C    R    W
         ```
         """
-        self.write_access = data[1] & 0x0F
-        self.read_access = (data[1] >> 4) & 0x0F
-        self.change_access = data[0] & 0x0F
-        self.read_and_write_access = (data[0] >> 4) & 0x0F
 
-    def get_permissions(self) -> bytes:
+        return FilePermissions(
+            read_key=(data[1] >> 4) & 0x0F,
+            write_key=data[1] & 0x0F,
+            read_write_key=(data[0] >> 4) & 0x0F,
+            change_key=data[0] & 0x0F,
+        )
+
+    def serialize(self) -> bytes:
         """
         Returns the permissions as a list of two bytes.
         """

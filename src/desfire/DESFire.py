@@ -7,7 +7,17 @@ from .devices.base import Device
 from .enums import DESFireCommand, DESFireCommunicationMode, DESFireKeySettings, DESFireKeyType, DESFireStatus
 from .exceptions import DESFireAuthException, DESFireCommunicationError, DESFireException
 from .key import DESFireKey
-from .schemas import ApplicationID, CardVersion, FileSettings, KeySettings
+from .schemas import (
+    ApplicationID,
+    BackupDataFileSettings,
+    CardVersion,
+    CyclicRecordFileSettings,
+    FileSettings,
+    KeySettings,
+    LinearRecordFileSettings,
+    StandardDataFileSettings,
+    ValueFileSettings,
+)
 from .util import CRC32, xor_lists
 
 logger = logging.getLogger(__name__)
@@ -145,7 +155,7 @@ class DESFire:
         r_val = bytearray([command.value])
 
         for param in parameters:
-            if param is int:
+            if isinstance(param, int):
                 r_val.append(param)
             elif isinstance(param, bytes):
                 r_val.extend(param)
@@ -262,7 +272,7 @@ class DESFire:
             # TODO: Check if this is a good idea, what is with the 0x80 padding?
             # Remove all null bytes from the end
 
-            decrypted_response = decrypted_response.rstrip(b"\x00")
+            decrypted_response = decrypted_response.rstrip(b"\0")
 
             logger.debug("Decrypted response (trimmed): " + decrypted_response.hex(" "))
 
@@ -271,7 +281,7 @@ class DESFire:
             crc_bytes = 4  # 2 (CRC16) is only needed for legacy authentication, which we do not support (only ISO+AES)
             received_crc = decrypted_response[-crc_bytes:]
             logger.debug("Received CRC  : " + received_crc.hex(" "))
-            calculated_crc = CRC32(decrypted_response[:-crc_bytes] + [0x00])
+            calculated_crc = CRC32(decrypted_response[:-crc_bytes] + b"\0")
             logger.debug("Calculated CRC: " + calculated_crc.hex(" "))
 
             if received_crc != calculated_crc:
@@ -512,6 +522,26 @@ class DESFire:
         )
         return CardVersion(raw_data)
 
+    def get_free_memory(self) -> int:
+        """
+        Gets the free memory on the card.
+
+        Authentication:
+            Not required.
+
+        Returns:
+            int: Free memory in bytes
+        """
+        logger.info(f"Executing command: get_free_memory (0x{DESFireCommand.GET_FREE_MEMORY.value:02x})")
+
+        raw_data = self._transceive(
+            self._command(DESFireCommand.GET_FREE_MEMORY),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+        return struct.unpack("<I", raw_data + b"\0")[0]
+
     def format_card(self):
         """
         Formats the card, deleting all keys, applications and files on the card.
@@ -536,6 +566,33 @@ class DESFire:
             self._command(DESFireCommand.FORMAT_PICC),
             DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.PLAIN,
+        )
+
+    def change_configuration(self, random_uuid: bool = False, disable_formatting: bool = False):
+        """
+        Changes the configuration of the card.
+
+        Authentication:
+            Required.
+
+        Args:
+            random_uid (bool): If true, the card will return a random UID when calling get_card_version.
+                Otherwise, the real UID of the card is returned.
+            disable_formatting (bool): If true, the card will not be formatted when formatting is called.
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.is_authenticated:
+            logger.warning("Tried to change configuration without authentication")
+            raise DESFireException("Not authenticated!")
+
+        logger.info(f"Executing command: change_configuration (0x{DESFireCommand.CHANGE_CONFIGURATION.value:02x})")
+
+        self._transceive(
+            self._command(DESFireCommand.CHANGE_CONFIGURATION, int((random_uuid << 1) | (disable_formatting << 0))),
+            DESFireCommunicationMode.ENCRYPTED,
+            DESFireCommunicationMode.CMAC,
         )
 
     #
@@ -966,7 +1023,34 @@ class DESFire:
 
         return [int(byte) for byte in raw_data]
 
-    def get_file_settings(self, file_id: int) -> FileSettings:
+    def get_iso_file_ids(self) -> list[int]:
+        """
+        Lists all ISO files belonging to the application currently selected. `select_application` needs to be called first
+        Authentication:
+            MAY be required depending on the application settings.
+        Returns:
+            List of file IDs in the application
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to get file IDs without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(f"Executing command: get_iso_file_ids (0x{DESFireCommand.GET_ISO_FILE_IDS.value:02x})")
+
+        raw_data = self._transceive(
+            self._command(DESFireCommand.GET_ISO_FILE_IDS),
+            tx_mode=DESFireCommunicationMode.PLAIN,
+            rx_mode=DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+        logger.debug(f"File ids: {raw_data.hex(' ')}")
+
+        return list(struct.unpack(f"<{len(raw_data) // 2}H", raw_data))
+
+    def get_file_settings(self, file_id: int) -> StandardDataFileSettings | ValueFileSettings | FileSettings:
         """
         Gets file settings for the file identified by file_id. `select_application` must be called first.
         Authentication is NOT ALWAYS needed to call this function. Depends on the application/card settings.
@@ -1000,13 +1084,58 @@ class DESFire:
         logger.debug(f"Raw data: {raw_data.hex(' ')}")
 
         # Parse the raw data
-        file_settings = FileSettings()
-        file_settings.parse(raw_data)
+        file_settings = FileSettings.parse(raw_data)
         logger.debug(f"File settings: {repr(file_settings)}")
 
         return file_settings
 
-    def read_file_data(self, file_id: int, file_settings: FileSettings) -> bytes:
+    def change_file_settings(self, file_id: int, file_settings: FileSettings):
+        """
+        Changes the file settings for the file identified by file_id. `select_application` must be called first.
+        Authentication is NOT ALWAYS needed to call this function. Depends on the application/card settings.
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings.
+                Can be obtained using the `get_file_settings` method.
+        Authentication:
+            MAY be required depending on the application settings.
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to change file settings without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(
+            f"Executing command: change_file_settings (0x{DESFireCommand.CHANGE_FILE_SETTINGS.value:02x}) for file {file_id:x}"
+        )
+
+        assert file_settings.encryption is not None
+        assert file_settings.permissions is not None
+
+        current_settings = self.get_file_settings(file_id)
+
+        # File size is stored in little endian
+        self._transceive(
+            self._command(
+                DESFireCommand.CHANGE_FILE_SETTINGS,
+                file_id,
+                file_settings.encryption.value,
+                file_settings.permissions.serialize(),
+            ),
+            (
+                DESFireCommunicationMode.PLAIN
+                if current_settings.permissions.change_access == 0x0E
+                else DESFireCommunicationMode.ENCRYPTED
+            ),
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+            encryption_offset=2,
+        )
+
+        logger.debug(f"File settings changed successfully: {repr(file_settings)}")
+
+    def read_file_data(self, file_id: int, file_settings: StandardDataFileSettings) -> bytes:
         """
         Read file data for file_id. SelectApplication needs to be called first
         Authentication is NOT ALWAYS needed to call this function. Depends on the application/card settings.
@@ -1059,7 +1188,27 @@ class DESFire:
         logger.debug(f"Total data that has been read: {ret.hex(' ')}")
         return bytes(ret)
 
-    def create_standard_file(self, file_id: int, file_settings: FileSettings):
+    def create_backup_file(self, file_id: int, file_settings: BackupDataFileSettings, iso_file_id: int | None = None):
+        """
+        Creates a backup data file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (FileSettings): Instance of the FileSettings schema containing the file settings that
+                should be applied to the file.
+            iso_file_id (int | None): Optional ISO file ID. If not provided, the file will be created with the
+                default ID.
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        self._create_data_file(file_id, file_settings, iso_file_id)
+
+    def create_standard_file(
+        self, file_id: int, file_settings: StandardDataFileSettings, iso_file_id: int | None = None
+    ):
         """
         Creates a standard data file in the application currently selected. `select_application` must be called first.
 
@@ -1070,11 +1219,19 @@ class DESFire:
             file_id (int): ID of the file to get the settings for.
             file_settings (FileSettings): Instance of the FileSettings schema containing the file settings that
                 should be applied to the file.
-
+            iso_file_id (int | None): Optional ISO file ID. If not provided, the file will be created with the
+                default ID.
         Raises:
             DESFireException: if an invalid configuration is provided
         """
+        self._create_data_file(file_id, file_settings, iso_file_id)
 
+    def _create_data_file(
+        self,
+        file_id: int,
+        file_settings: StandardDataFileSettings | BackupDataFileSettings,
+        iso_file_id: int | None = None,
+    ):
         if not self.last_selected_application:
             logger.error("Tried to create file without selecting an application")
             raise DESFireException("No application selected, call select_application first")
@@ -1083,10 +1240,14 @@ class DESFire:
             logger.error("File size must be between 0 and 255 (single byte)")
             raise DESFireException("File size must be between 0 and 255 (single byte)")
 
-        logger.info(
-            "Executing command: create_standard_file"
-            " (0x{DESFireCommand.CREATE_STD_DATA_FILE.value:02x}) on file {file_id:x}"
-        )
+        if isinstance(file_settings, BackupDataFileSettings):
+            command = DESFireCommand.CREATE_BACKUP_DATA_FILE
+        elif isinstance(file_settings, StandardDataFileSettings):
+            command = DESFireCommand.CREATE_STD_DATA_FILE
+        else:
+            raise DESFireException("Invalid file settings provided")
+
+        logger.info("Executing command: create_standard_file (0x{command.value:02x}) on file {file_id:x}")
 
         assert file_settings.encryption is not None
         assert file_settings.permissions is not None
@@ -1095,15 +1256,135 @@ class DESFire:
 
         self._transceive(
             self._command(
-                DESFireCommand.CREATE_STD_DATA_FILE,
+                command,
                 file_id,
+                iso_file_id or b"",
                 file_settings.encryption.value,
-                file_settings.permissions.get_permissions(),
+                file_settings.permissions.serialize(),
                 struct.pack("<I", file_settings.file_size)[:3],
             ),
             DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )
+
+    def create_value_file(self, file_id: int, file_settings: ValueFileSettings):
+        """
+        Creates a value file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (ValueFileSettings): Instance of the ValueFileSettings schema containing the file settings
+                that should be applied to the file.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to create value file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        if file_settings.max_value < file_settings.min_value:
+            logger.error("Max value must be greater than min value")
+
+        logger.info(
+            "Executing command: create_value_file (0x{DESFireCommand.CREATE_VALUE_FILE.value:02x}) on file {file_id:x}"
+        )
+
+        self._transceive(
+            self._command(
+                DESFireCommand.CREATE_VALUE_FILE,
+                file_id,
+                file_settings.encryption.value,
+                file_settings.permissions.serialize(),
+                struct.pack("<I", file_settings.min_value),
+                struct.pack("<I", file_settings.max_value),
+                struct.pack("<I", file_settings.current_value),
+                0x01 if file_settings.limited_credit else 0x00,
+            ),
+            DESFireCommunicationMode.CMAC,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+    def _create_record_file(
+        self,
+        file_id: int,
+        file_settings: CyclicRecordFileSettings | LinearRecordFileSettings,
+        iso_file_id: int | None = None,
+    ):
+        if not self.last_selected_application:
+            logger.error("Tried to create record file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        if isinstance(file_settings, CyclicRecordFileSettings):
+            command = DESFireCommand.CREATE_CYCLIC_RECORD_FILE
+        elif isinstance(file_settings, LinearRecordFileSettings):
+            command = DESFireCommand.CREATE_LINEAR_RECORD_FILE
+        else:
+            raise DESFireException("Invalid file settings provided")
+
+        logger.info("Executing command: create_record_file (0x{command.value:02x}) on file {file_id:x}")
+
+        assert file_settings.encryption is not None
+        assert file_settings.permissions is not None
+
+        # File size is stored in little endian
+        self._transceive(
+            self._command(
+                command,
+                file_id,
+                iso_file_id or b"",
+                file_settings.encryption.value,
+                file_settings.permissions.serialize(),
+                struct.pack("<I", file_settings.record_size)[:3],
+                struct.pack("<I", file_settings.max_records)[:3],
+            ),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+    def create_cyclic_record_file(
+        self, file_id: int, file_settings: CyclicRecordFileSettings, iso_file_id: int | None = None
+    ):
+        """
+        Creates a cyclic record file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (CyclicRecordFileSettings): Instance of the CyclicRecordFileSettings schema containing the
+                file settings that should be applied to the file.
+            iso_file_id (int | None): Optional ISO file ID. If not provided, the file will be created with the
+                default ID.
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        self._create_record_file(file_id, file_settings, iso_file_id)
+
+    def create_linear_record_file(
+        self, file_id: int, file_settings: LinearRecordFileSettings, iso_file_id: int | None = None
+    ):
+        """
+        Creates a linear record file in the application currently selected. `select_application` must be called first.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            file_settings (LinearRecordFileSettings): Instance of the LinearRecordFileSettings schema containing the
+                file settings that should be applied to the file.
+            iso_file_id (int | None): Optional ISO file ID. If not provided, the file will be created with the
+                default ID.
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        self._create_record_file(file_id, file_settings, iso_file_id)
 
     def write_file_data(self, file_id: int, offset: int, communication_mode: DESFireCommunicationMode, data: bytes):
         """
@@ -1154,6 +1435,183 @@ class DESFire:
             encryption_offset=8,
         )
 
+    def get_value(self, file_id: int) -> int:
+        """
+        Gets the value of a value file.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to get value without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(f"Executing command: get_value (0x{DESFireCommand.GET_VALUE.value:02x}) for file {file_id:x}")
+
+        raw_data = self._transceive(
+            self._command(DESFireCommand.GET_VALUE, file_id),
+            DESFireCommunicationMode.CMAC,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+        assert len(raw_data) == 4
+        return int(struct.unpack("<I", raw_data)[0])
+
+    def credit(self, file_id: int, value: int):
+        """
+        Credits a value file with the specified amount.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            value (int): Amount to credit to the file.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to credit value without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(f"Executing command: credit (0x{DESFireCommand.CREDIT.value:02x}) for file {file_id:x}")
+
+        self._transceive(
+            self._command(DESFireCommand.CREDIT, file_id, value),
+            DESFireCommunicationMode.ENCRYPTED,
+        )
+
+    def limited_credit(self, file_id: int, value: int):
+        """
+        Credits a value file with the specified amount.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            value (int): Amount to credit to the file.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        if not self.last_selected_application:
+            logger.error("Tried to credit value without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(
+            f"Executing command: limited_credit (0x{DESFireCommand.LIMITED_CREDIT.value:02x}) for file {file_id:x}"
+        )
+
+        self._transceive(
+            self._command(DESFireCommand.LIMITED_CREDIT, file_id, struct.pack("<I", value)),
+            DESFireCommunicationMode.ENCRYPTED,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+    def debit(self, file_id: int, value: int):
+        """
+        Debits a value file with the specified amount.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Args:
+            file_id (int): ID of the file to get the settings for.
+            value (int): Amount to debit from the file.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        if not self.last_selected_application:
+            logger.error("Tried to debit value without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(f"Executing command: debit (0x{DESFireCommand.DEBIT.value:02x}) for file {file_id:x}")
+
+        self._transceive(
+            self._command(DESFireCommand.DEBIT, file_id, value),
+            DESFireCommunicationMode.ENCRYPTED,
+        )
+
+    def clear_record_file(self, file_id: int):
+        """
+        Clears the record file specified by file_id
+        Authentication:
+            MAY be required depending on the application settings.
+        Args:
+            file_id (int): ID of the file to get the settings for.
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+        if not self.last_selected_application:
+            logger.error("Tried to clear record file without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(
+            f"Executing command: clear_record_file (0x{DESFireCommand.CLEAR_RECORD_FILE.value:02x}) for file {file_id:x}"
+        )
+
+        self._transceive(
+            self._command(DESFireCommand.CLEAR_RECORD_FILE, file_id),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+    def commit_transaction(self):
+        """
+        Commits the transaction for value files.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to commit transaction without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(f"Executing command: commit_transaction (0x{DESFireCommand.COMMIT_TRANSACTION.value:02x})")
+
+        self._transceive(
+            self._command(DESFireCommand.COMMIT_TRANSACTION),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
+    def abort_transaction(self):
+        """
+        Aborts the transaction for value files.
+
+        Authentication:
+            MAY be required depending on the application settings.
+
+        Raises:
+            DESFireException: if an invalid configuration is provided
+        """
+
+        if not self.last_selected_application:
+            logger.error("Tried to abort transaction without selecting an application")
+            raise DESFireException("No application selected, call select_application first")
+
+        logger.info(f"Executing command: abort_transaction (0x{DESFireCommand.ABORT_TRANSACTION.value:02x})")
+
+        self._transceive(
+            self._command(DESFireCommand.ABORT_TRANSACTION),
+            DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
+        )
+
     def delete_file(self, file_id: int):
         """
         Deletes the file specified by file_id
@@ -1176,6 +1634,6 @@ class DESFire:
 
         self._transceive(
             self._command(DESFireCommand.DELETE_FILE, file_id),
-            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
             DESFireCommunicationMode.PLAIN,
+            DESFireCommunicationMode.CMAC if self.is_authenticated else DESFireCommunicationMode.PLAIN,
         )

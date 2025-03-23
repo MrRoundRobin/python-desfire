@@ -1,16 +1,20 @@
 import struct
 
 from ..enums import DESFireCommunicationMode, DESFireFileType
+from .backup_data_file_settings import BackupDataFileSettings
+from .cyclic_record_file_settings import CyclicRecordFileSettings
 from .file_permissions import FilePermissions
+from .liear_record_file_settings import LinearRecordFileSettings
+from .standard_data_file_settings import StandardDataFileSettings
+from .value_file_settings import ValueFileSettings
 
 
 class FileSettings:
     def __init__(
         self,
+        file_type: DESFireFileType,
+        permissions: FilePermissions,
         encryption: DESFireCommunicationMode = DESFireCommunicationMode.PLAIN,
-        file_type: DESFireFileType | None = None,
-        permissions: FilePermissions | None = None,
-        file_size: int = 0,
     ):
         """
         Initialize the FileSettings object
@@ -22,16 +26,25 @@ class FileSettings:
             file_type (DESFireFileType | None, optional): Type of the file. Currently only standard files are supported.
             permissions (FilePermissions | None, optional): Permissions that should be applied to the file.
                 Refer to the FilePermissions class for more information.
-            file_size (int, optional): File size in bytes. Only used for standard data files.
         """
         self.encryption = encryption
         self.file_type = file_type
         self.permissions = permissions
 
-        # used only for MDFT_STANDARD_DATA_FILE and MDFT_BACKUP_DATA_FILE, uint32_t
-        self.file_size = file_size
+    encryption: DESFireCommunicationMode
+    file_type: DESFireFileType
+    permissions: FilePermissions
 
-    def parse(self, data: bytes):
+    @classmethod
+    def parse(
+        cls, data: bytes
+    ) -> (
+        BackupDataFileSettings
+        | CyclicRecordFileSettings
+        | LinearRecordFileSettings
+        | StandardDataFileSettings
+        | ValueFileSettings
+    ):
         """
         Takes raw data from command 0xF5 (get file settings) and parses it into a FileSettings object.
 
@@ -56,17 +69,51 @@ class FileSettings:
         There are four other file types that are not implemented yet.
         """
 
-        self.file_type = DESFireFileType(data[0])
-        self.encryption = DESFireCommunicationMode(data[1])
-        self.permissions = FilePermissions()
-        self.permissions.parse(data[2:4])
+        file_type = DESFireFileType(data[0])
 
-        if self.file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE:
-            # Standard data file, parse file size in bytes. <I is little-endian unsigned int
-            (self.file_size,) = struct.unpack("<I", data[4:7] + b"\0")
+        file_settings = None
+
+        if file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE:
+            file_settings = StandardDataFileSettings(
+                encryption=DESFireCommunicationMode(data[1]),
+                permissions=FilePermissions.parse(data[2:4]),
+                file_size=struct.unpack("<I", data[4:7] + b"\0")[0],
+            )
+        elif file_type == DESFireFileType.MDFT_BACKUP_DATA_FILE:
+            file_settings = BackupDataFileSettings(
+                encryption=DESFireCommunicationMode(data[1]),
+                permissions=FilePermissions.parse(data[2:4]),
+                file_size=struct.unpack("<I", data[4:7] + b"\0")[0],
+            )
+        elif file_type == DESFireFileType.MDFT_VALUE_FILE_WITH_BACKUP:
+            file_settings = ValueFileSettings(
+                encryption=DESFireCommunicationMode(data[1]),
+                permissions=FilePermissions.parse(data[2:4]),
+                min_value=struct.unpack("<I", data[4:8])[0],
+                max_value=struct.unpack("<I", data[8:12])[0],
+                value=struct.unpack("<I", data[12:16])[0],
+                backup_value=bool(struct.unpack("<B", data[16])[0]),
+            )
+        elif file_type == DESFireFileType.MDFT_LINEAR_RECORD_FILE_WITH_BACKUP:
+            file_settings = LinearRecordFileSettings(
+                encryption=DESFireCommunicationMode(data[1]),
+                permissions=FilePermissions.parse(data[2:4]),
+                record_size=struct.unpack("<I", data[4:7] + b"\0")[0],  # Check endianess
+                max_records=struct.unpack("<I", data[7:10] + b"\0")[0],
+                current_records=struct.unpack("<I", data[10:14] + b"\0")[0],
+            )
+        elif file_type == DESFireFileType.MDFT_CYCLIC_RECORD_FILE_WITH_BACKUP:
+            file_settings = CyclicRecordFileSettings(
+                encryption=DESFireCommunicationMode(data[1]),
+                permissions=FilePermissions.parse(data[2:4]),
+                record_size=struct.unpack("<I", data[4:7] + b"\0")[0],  # Check endianess
+                max_records=struct.unpack("<I", data[7:10] + b"\0")[0],
+                current_records=struct.unpack("<I", data[10:14] + b"\0")[0],
+            )
         else:
-            # TODO: We currently only support standard data files
             raise NotImplementedError(f"Filetype {data[0:1].hex()} is currently not supported.")
+
+        return file_settings
 
     def __repr__(self):
         """
@@ -75,10 +122,6 @@ class FileSettings:
         temp = " ----- FileSettings ----\r\n"
         temp += f"File type: {self.file_type.name}\r\n"
         temp += f"Encryption: {self.encryption.name}\r\n"
-
-        if self.file_type == DESFireFileType.MDFT_STANDARD_DATA_FILE:
-            temp += f"File size: {self.file_size}\r\n"
-
         temp += f"Permissions: \r\n{repr(self.permissions)}\r\n"
 
         return temp
